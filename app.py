@@ -117,7 +117,7 @@ if uploaded_file:
         fig2.update_layout(height=400, showlegend=False)
         st.plotly_chart(fig2, width='stretch')
 
-    # FIXED Monthly Analysis
+    # FIXED Monthly Analysis - CORRECTED VERSION
     st.markdown("---")
     st.subheader("📈 Monthly Performance Comparison (YoY)")
 
@@ -139,12 +139,16 @@ if uploaded_file:
         monthly_comparison['Previous_FY'] = 0
 
     monthly_comparison = monthly_comparison.fillna(0)
+
+    # **NEW: Calculate ABSOLUTE Quantity Difference (Current - Previous)**
+    monthly_comparison['Qty_Diff'] = monthly_comparison['Current_FY'] - monthly_comparison['Previous_FY']
+    # Keep YoY % for chart annotations but use Qty_Diff for table/heatmap
     monthly_comparison['YoY_Growth_%'] = monthly_comparison.apply(lambda row: safe_growth_calc(row['Current_FY'], row['Previous_FY']), axis=1)
 
     calculated_total = monthly_comparison['Current_FY'].sum()
     st.success(f"✅ Monthly Sum: {calculated_total:,.0f} = Yearly Total: {curr_total:,.0f} ✓")
 
-    # Monthly Chart
+    # Monthly Chart (keeping existing logic - shows % annotations)
     fig_monthly = go.Figure()
     fig_monthly.add_trace(go.Scatter(x=monthly_comparison['Month'], y=monthly_comparison['Current_FY'], mode='lines+markers+text', name=f'{fy_selector}', line=dict(color='#10B981', width=5), marker=dict(size=12), text=[f"{int(x):,}" for x in monthly_comparison['Current_FY']], textposition="top center", textfont=dict(size=11, color="#059669")))
     
@@ -159,17 +163,39 @@ if uploaded_file:
     fig_monthly.update_layout(title=f"📈 Monthly Trend | Total: {calculated_total:,.0f}", xaxis_title="Month", yaxis_title="Quantity", height=500, showlegend=True, template='plotly_white', hovermode='x unified')
     st.plotly_chart(fig_monthly, width='stretch')
 
+    # **CORRECTED: Monthly Breakdown with ABSOLUTE Quantity Differences**
     st.markdown("### 📊 Monthly Breakdown")
     col1, col2, col3 = st.columns(3)
-    col1.metric("📈 Total Growth", f"{safe_growth_calc(curr_total, prev_total):+.1f}%")
-    col2.metric("🥇 Best Month", f"{monthly_comparison['YoY_Growth_%'].max():+.1f}%")
-    col3.metric("📉 Worst Month", f"{monthly_comparison['YoY_Growth_%'].min():+.1f}%")
+    total_qty_diff = monthly_comparison['Qty_Diff'].sum()
+    col1.metric("📈 Total Qty Change", f"{total_qty_diff:+,.0f}", f"{safe_growth_calc(curr_total, prev_total):+.1f}%")
+    col2.metric("🥇 Best Month", f"{monthly_comparison['Qty_Diff'].max():+.0f}")
+    col3.metric("📉 Worst Month", f"{monthly_comparison['Qty_Diff'].min():+.0f}")
 
-    st.dataframe(monthly_comparison[['Month', 'Current_FY', 'Previous_FY', 'YoY_Growth_%']].round(), column_config={"Month": st.column_config.TextColumn("Month"), "Current_FY": st.column_config.NumberColumn("Current", format="%.0f"), "Previous_FY": st.column_config.NumberColumn("Previous", format="%.0f"), "YoY_Growth_%": st.column_config.NumberColumn("YoY %", format="%.1f%%")}, height=280, width='stretch')
+    # **CORRECTED: Dataframe showing ABSOLUTE Quantity Differences**
+    st.dataframe(
+        monthly_comparison[['Month', 'Current_FY', 'Previous_FY', 'Qty_Diff', 'YoY_Growth_%']].round(),
+        column_config={
+            "Month": st.column_config.TextColumn("Month"),
+            "Current_FY": st.column_config.NumberColumn("Current FY", format="%.0f"),
+            "Previous_FY": st.column_config.NumberColumn("Previous FY", format="%.0f"),
+            "Qty_Diff": st.column_config.NumberColumn("Qty Change\n(Current-Prev)", format="%.0f"),
+            "YoY_Growth_%": st.column_config.NumberColumn("YoY %", format="%.1f%%")
+        },
+        height=280, 
+        width='stretch'
+    )
 
-    st.markdown("### 🔥 Growth Heatmap")
-    fig_heatmap = px.imshow(monthly_comparison.set_index('Month')[['Current_FY', 'Previous_FY', 'YoY_Growth_%']].T, labels=dict(color="Value"), color_continuous_scale="RdYlGn", title="Monthly Performance Matrix", aspect="auto")
-    fig_heatmap.update_layout(height=350, margin=dict(l=50, r=50, t=50, b=50))
+    # **CORRECTED: Growth Heatmap showing ABSOLUTE Quantity Differences**
+    st.markdown("### 🔥 Quantity Change Heatmap")
+    heatmap_data = monthly_comparison.set_index('Month')[['Current_FY', 'Previous_FY', 'Qty_Diff']].round(0)
+    fig_heatmap = px.imshow(
+        heatmap_data.T, 
+        labels=dict(color="Quantity"), 
+        color_continuous_scale="RdYlGn", 
+        title="📊 Monthly Quantity Changes (Current - Previous)",
+        aspect="auto"
+    )
+    fig_heatmap.update_layout(height=400, margin=dict(l=50, r=50, t=80, b=50))
     st.plotly_chart(fig_heatmap, width='stretch')
 
     # Smart Insights
@@ -183,27 +209,101 @@ if uploaded_file:
     peak_month = monthly_comparison.loc[monthly_comparison['Current_FY'].idxmax(), 'Month']
     col3.info(f"📅 **Peak Month**: {peak_month}")
 
-    # Customer Analysis
+    # **ENHANCED Customer Analysis - WITH MONTHLY COMPARISON & BUYING PATTERNS**
     st.markdown("---")
-    st.subheader("👥 Customer Analysis")
+    st.subheader("👥 Customer Analysis - ENHANCED WITH MONTHLY COMPARISON & BUYING PATTERNS")
+
+    # Get all unique customers across both years
     all_customers = set(df_prev[customer_col].dropna()) | set(df_curr[customer_col].dropna())
+
     records = []
     for cust in sorted(all_customers):
-        prev_sales = df_prev[df_prev[customer_col] == cust][qty_col].sum() if not df_prev.empty else 0
-        curr_sales = df_curr[df_curr[customer_col] == cust][qty_col].sum()
-        if prev_sales > 0 and curr_sales > 0:
-            growth_pct = safe_growth_calc(curr_sales, prev_sales)
-            status, growth_display = "🟢 Active", f"{growth_pct:+.1f}%"
-        elif prev_sales > 0 and curr_sales == 0:
-            status, growth_display = "🔴 Lost", "-100%"
-        elif prev_sales == 0 and curr_sales > 0:
-            status, growth_display = "🟢 New", "∞%"
+        # Total yearly sales
+        prev_yearly_sales = df_prev[df_prev[customer_col] == cust][qty_col].sum() if not df_prev.empty else 0
+        curr_yearly_sales = df_curr[df_curr[customer_col] == cust][qty_col].sum()
+        
+        # **NEW: Month-wise comparison (APR month specifically)**
+        prev_apr_sales = df_prev[(df_prev[customer_col] == cust) & (df_prev['Month_Num'] == 4)][qty_col].sum()
+        curr_apr_sales = df_curr[(df_curr[customer_col] == cust) & (df_curr['Month_Num'] == 4)][qty_col].sum()
+        apr_qty_diff = curr_apr_sales - prev_apr_sales
+        
+        # **NEW: Smart Buying Pattern Recognition**
+        customer_history = df_filtered[df_filtered[customer_col] == cust].copy()
+        if len(customer_history) > 0:
+            customer_history = customer_history.sort_values(date_col)
+            monthly_purchases = customer_history.groupby('Month_Num').size()
+            purchase_frequency = len(monthly_purchases[monthly_purchases > 0])
+            
+            if purchase_frequency >= 10:  # Bought in 10+ months
+                pattern = "📅 Monthly"
+            elif purchase_frequency >= 7:  # Bought in 7-9 months
+                pattern = "📊 Bi-Monthly"
+            elif purchase_frequency >= 5:  # Bought in 5-6 months
+                pattern = "🔄 Quarterly"
+            elif purchase_frequency >= 3:  # Bought in 3-4 months
+                pattern = "⏳ Seasonal"
+            elif purchase_frequency >= 2:  # Bought twice a year
+                pattern = "📆 Half-Yearly"
+            else:  # Bought once or never
+                pattern = "📍 Yearly/One-off"
         else:
-            status, growth_display = "⚪ Inactive", "0%"
-        records.append([cust, prev_sales, curr_sales, growth_display, status])
-    
-    behavior_df = pd.DataFrame(records, columns=["Customer", "Prev FY", "Curr FY", "Growth %", "Status"])
-    st.dataframe(behavior_df.sort_values("Curr FY", ascending=False), width='stretch')
+            pattern = "❌ No History"
+        
+        # **ENHANCED Status Logic with APR comparison & DIFFERENT COLOR FOR NEW**
+        if prev_yearly_sales > 0 and curr_yearly_sales > 0:
+            yearly_growth = safe_growth_calc(curr_yearly_sales, prev_yearly_sales)
+            if curr_apr_sales > 0 and prev_apr_sales > 0:  # Active in APR both years
+                status = f"🟢 Active (APR)"
+                apr_status = f"{apr_qty_diff:+,.0f}"
+            elif curr_apr_sales > 0:  # New in current APR
+                status = f"🟢 New APR"
+                apr_status = f"+{curr_apr_sales:,.0f}"
+            else:
+                status = "🟡 Active"
+                apr_status = "No APR"
+            growth_display = f"{yearly_growth:+.1f}%"
+        elif prev_yearly_sales > 0 and curr_yearly_sales == 0:
+            # **LOST Customer - Show buying pattern**
+            status = f"🔴 Lost ({pattern})"
+            apr_status = f"-{prev_apr_sales:,.0f}"
+            growth_display = "-100%"
+        elif prev_yearly_sales == 0 and curr_yearly_sales > 0:
+            # **NEW CUSTOMER - DIFFERENT COLOR (🟡)**
+            status = f"🟡 New ({pattern})"
+            apr_status = f"+{curr_apr_sales:,.0f}"
+            growth_display = "∞%"
+        else:
+            status = "⚪ Inactive"
+            apr_status = "0"
+            growth_display = "0%"
+        
+        records.append([cust, f"{prev_yearly_sales:,.0f}", f"{curr_yearly_sales:,.0f}", growth_display, status, apr_status, pattern])
+
+    behavior_df = pd.DataFrame(records, columns=["Customer", "Prev FY", "Curr FY", "Growth %", "Status", "APR Change", "Buying Pattern"])
+    st.dataframe(
+        behavior_df.sort_values("Curr FY", ascending=False),
+        column_config={
+            "Customer": st.column_config.TextColumn("Customer"),
+            "Prev FY": st.column_config.NumberColumn("Prev FY Total", format="%.0f"),
+            "Curr FY": st.column_config.NumberColumn("Curr FY Total", format="%.0f"),
+            "APR Change": st.column_config.NumberColumn("APR Qty Change", format="%.0f")
+        },
+        width='stretch',
+        height=400
+    )
+
+    # **NEW: Summary of Customer Status**
+    st.markdown("---")
+    col1, col2, col3, col4 = st.columns(4)
+    active_apr = len(behavior_df[behavior_df['Status'].str.contains('APR|New APR', na=False)])
+    total_customers = len(behavior_df)
+    lost_customers = len(behavior_df[behavior_df['Status'].str.contains('Lost', na=False)])
+    new_customers = len(behavior_df[behavior_df['Status'].str.contains('New', na=False)])
+
+    col1.metric("🟢 Active APR", active_apr)
+    col2.metric("🔴 Lost", lost_customers)
+    col3.metric("🟡 New", new_customers)  # 🟡 for NEW customers
+    col4.metric("📊 Total", total_customers)
 
     # Downloads
     st.markdown("---")

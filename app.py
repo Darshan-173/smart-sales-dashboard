@@ -554,8 +554,8 @@ else:
     st.markdown("""
     ```
     Date        | Product | Customer | Quantity
-    2025-04-15  | ABC | HCL | 10000
-    2025-05-20  | XYZ | HYPO| 250000
+    2025-04-15  |   ABC   |    HCL   | 10000
+    2025-05-20  |   XYZ   |    HYPO  | 250000
     ```
     **✅ Works with any column names containing: date/Date, product/Product, customer/Customer, qty/quantity/KG**
     """)

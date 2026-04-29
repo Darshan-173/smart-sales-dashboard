@@ -240,7 +240,7 @@ if uploaded_file:
     st.plotly_chart(fig_heatmap, width='stretch')
 
     # =========================================================
-    # 🧠 CUSTOMER-PRODUCT MONTHLY STATUS (OPTIMIZED & ENHANCED)
+    # 🧠 CUSTOMER-PRODUCT MONTHLY STATUS (ENHANCED WITH FILTERS)
     # =========================================================
     st.markdown("---")
     st.subheader("🧠 Customer-Product Monthly Status (Advanced)")
@@ -334,8 +334,40 @@ if uploaded_file:
     col3.metric("💹 Retention Rate", f"{retention_rate:.1f}%")
     col4.metric("🔵 Expansion", expansion_count)
 
-    # FINAL DISPLAY
-    display_df = comparison_df.sort_values(['Customer', 'Product', 'Month_Order']).drop(columns=['Month_Order'])
+    # 🔥 NEW FILTERS & SEARCH FOR Customer-Product Table
+    st.markdown("### 🔍 Advanced Filters")
+    filter_row1, filter_row2 = st.columns([2, 3])
+    
+    with filter_row1:
+        # Search bar for Company name
+        search_company = st.text_input("🔎 Search Company", placeholder="Type company name...")
+    
+    with filter_row2:
+        # Dropdown filters
+        all_statuses = sorted(comparison_df['Status'].unique())
+        all_months = sorted(comparison_df['Month'].unique())
+        all_products = sorted(comparison_df['Product'].dropna().unique())
+        
+        selected_status = st.multiselect("Status", options=all_statuses, default=all_statuses, key="cp_status")
+        selected_months = st.multiselect("Months", options=all_months, default=all_months, key="cp_months")
+        selected_products_cp = st.multiselect("Products", options=all_products[:20], default=all_products[:20], key="cp_products")  # Limit to 20 for UI
+
+    # Apply filters
+    filtered_cp_df = comparison_df.copy()
+    
+    if search_company:
+        filtered_cp_df = filtered_cp_df[filtered_cp_df['Customer'].str.contains(search_company, case=False, na=False)]
+    
+    filtered_cp_df = filtered_cp_df[
+        filtered_cp_df['Status'].isin(selected_status) &
+        filtered_cp_df['Month'].isin(selected_months) &
+        filtered_cp_df['Product'].isin(selected_products_cp)
+    ]
+
+    # FINAL DISPLAY with filter info
+    st.info(f"📊 **Showing {len(filtered_cp_df):,} of {len(comparison_df):,} records")
+    
+    display_df = filtered_cp_df.sort_values(['Customer', 'Product', 'Month_Order']).drop(columns=['Month_Order'])
     st.dataframe(
         display_df[['Customer', 'Product', 'Month', 'Prev_Qty', 'Curr_Qty', 'Status']],
         height=500,
@@ -359,7 +391,9 @@ if uploaded_file:
     peak_month = monthly_comparison.loc[monthly_comparison['Current_FY'].idxmax(), 'Month']
     col3.info(f"📅 **Peak Month**: {peak_month}")
 
-    # Customer Analysis
+    # =========================================================
+    # 👥 CUSTOMER ANALYSIS (ENHANCED WITH FILTERS & NEW COLUMN)
+    # =========================================================
     st.markdown("---")
     st.subheader("👥 Customer Analysis")
 
@@ -369,6 +403,16 @@ if uploaded_file:
     for cust in sorted(all_customers):
         prev_yearly_sales = df_prev[df_prev[customer_col] == cust][qty_col].sum() if not df_prev.empty else 0
         curr_yearly_sales = df_curr[df_curr[customer_col] == cust][qty_col].sum()
+        
+        # 🔥 NEW COLUMN: Previous FY Actual Month (highest month in prev FY)
+        if not df_prev.empty and len(df_prev[df_prev[customer_col] == cust]) > 0:
+            prev_monthly = df_prev[(df_prev[customer_col] == cust)].groupby('Month_Num')[qty_col].sum()
+            prev_peak_month_num = prev_monthly.idxmax() if not prev_monthly.empty else None
+            prev_peak_month = month_map.get(prev_peak_month_num, 'None')
+            prev_peak_qty = prev_monthly.max()
+        else:
+            prev_peak_month = 'None'
+            prev_peak_qty = 0
         
         prev_apr_sales = df_prev[(df_prev[customer_col] == cust) & (df_prev['Month_Num'] == 4)][qty_col].sum()
         curr_apr_sales = df_curr[(df_curr[customer_col] == cust) & (df_curr['Month_Num'] == 4)][qty_col].sum()
@@ -399,16 +443,44 @@ if uploaded_file:
             apr_status = "0"
             growth_display = "0%"
         
-        records.append([cust, f"{prev_yearly_sales:,.0f}", f"{curr_yearly_sales:,.0f}", growth_display, status, apr_status])
+        records.append([cust, f"{prev_yearly_sales:,.0f}", f"{curr_yearly_sales:,.0f}", growth_display, 
+                       status, apr_status, f"{prev_peak_month} ({prev_peak_qty:,.0f})"])
 
-    behavior_df = pd.DataFrame(records, columns=["Customer", "Prev FY", "Curr FY", "Growth %", "Status", "APR Change"])
+    behavior_df = pd.DataFrame(records, columns=["Customer", "Prev FY", "Curr FY", "Growth %", "Status", "APR Change", "Prev Peak Month"])
+    
+    # 🔥 NEW FILTERS & SEARCH FOR Customer Analysis Table
+    st.markdown("### 🔍 Customer Filters")
+    cust_filter_row1, cust_filter_row2 = st.columns([2, 2])
+    
+    with cust_filter_row1:
+        # Search bar for Company name
+        search_customer = st.text_input("🔎 Search Customer", placeholder="Type customer name...", key="cust_search")
+    
+    with cust_filter_row2:
+        # Status filter dropdown
+        all_customer_statuses = sorted(behavior_df['Status'].unique())
+        selected_customer_status = st.multiselect("Status", options=all_customer_statuses, default=all_customer_statuses, key="cust_status")
+
+    # Apply customer filters
+    filtered_behavior_df = behavior_df.copy()
+    
+    if search_customer:
+        filtered_behavior_df = filtered_behavior_df[filtered_behavior_df['Customer'].str.contains(search_customer, case=False, na=False)]
+    
+    filtered_behavior_df = filtered_behavior_df[filtered_behavior_df['Status'].isin(selected_customer_status)]
+
+    st.info(f"👥 **Showing {len(filtered_behavior_df):,} of {len(behavior_df):,} customers")
+    
     st.dataframe(
-        behavior_df.sort_values("Curr FY", ascending=False),
+        filtered_behavior_df.sort_values("Curr FY", ascending=False),
         column_config={
             "Customer": st.column_config.TextColumn("Customer"),
             "Prev FY": st.column_config.NumberColumn("Prev FY Total", format="%.0f"),
             "Curr FY": st.column_config.NumberColumn("Curr FY Total", format="%.0f"),
-            "APR Change": st.column_config.NumberColumn("APR Qty Change", format="%.0f")
+            "Growth %": st.column_config.TextColumn("Growth %"),
+            "Status": st.column_config.TextColumn("Status", width="150px"),
+            "APR Change": st.column_config.TextColumn("APR Qty Change"),
+            "Prev Peak Month": st.column_config.TextColumn("Prev FY Peak Month", width="180px")  # 🔥 NEW COLUMN
         },
         height=400, 
         width='stretch'

@@ -29,6 +29,50 @@ def safe_growth_calc(curr, prev):
         return float('inf') if curr > 0 else 0
     return ((curr - prev) / prev) * 100
 
+# 🔥 FIXED LOST LOGIC + ENHANCED RECOVERED
+def mark_lost_streaks(df, customer_col='Customer', product_col='Product'):
+    """✅ FIXED: Only marks 3rd+ month as Lost, keeps earlier months as Inactive"""
+    df = df.copy()
+    
+    for (cust, product), idx in df.groupby([customer_col, product_col]).groups.items():
+        group = df.loc[idx].sort_values('Month_Order')
+        
+        inactive_streak = 0
+        
+        for i in group.index:
+            if df.loc[i, 'Status'] == "🟡 Inactive":
+                inactive_streak += 1
+            else:
+                inactive_streak = 0
+            
+            # ✅ FIXED: Only mark CURRENT month when streak >= 3
+            if inactive_streak >= 3:
+                df.loc[i, 'Status'] = "🔴 Lost"
+    
+    return df
+
+def mark_recovered(df, customer_col='Customer', product_col='Product'):
+    """🟣 PRO LEVEL: Detects meaningful recovery with context"""
+    df = df.copy()
+    
+    for (cust, product), idx in df.groupby([customer_col, product_col]).groups.items():
+        group = df.loc[idx].sort_values('Month_Order')
+        was_lost = False
+        
+        for i in group.index:
+            current_status = df.loc[i, 'Status']
+            
+            if current_status == "🔴 Lost":
+                was_lost = True
+            
+            # 🔥 PRO LEVEL: Recovery with context
+            elif was_lost and current_status in ["🟢 Active", "🔵 Expansion"]:
+                recovery_context = "🟢 Active" if current_status == "🟢 Active" else "🔵 Expansion"
+                df.loc[i, 'Status'] = f"🟣 Recovered ({recovery_context})"
+                was_lost = False  # reset after recovery
+    
+    return df
+
 uploaded_file = st.sidebar.file_uploader("Upload Sales Data", type=['csv','xlsx'])
 
 if uploaded_file:
@@ -240,7 +284,7 @@ if uploaded_file:
     st.plotly_chart(fig_heatmap, width='stretch')
 
     # =========================================================
-    # 🧠 CUSTOMER-PRODUCT MONTHLY STATUS (ENHANCED WITH FILTERS)
+    # 🧠 CUSTOMER-PRODUCT MONTHLY STATUS (ENHANCED WITH RECOVERED)
     # =========================================================
     st.markdown("---")
     st.subheader("🧠 Customer-Product Monthly Status (Advanced)")
@@ -289,28 +333,15 @@ if uploaded_file:
     fy_order_map = {m:i for i,m in enumerate([4,5,6,7,8,9,10,11,12,1,2,3])}
     comparison_df['Month_Order'] = comparison_df['Month_Num'].map(fy_order_map)
     comparison_df = comparison_df.sort_values(['Customer', 'Product', 'Month_Order']).reset_index(drop=True)
+    
+    # Rename columns EARLY for function compatibility
+    comparison_df = comparison_df.rename(columns={customer_col: 'Customer', product_col: 'Product'})
 
-    # 🔥 LOST LOGIC (marks ALL 3 months in streak - OPTIMIZED)
-    def mark_lost_streaks(df):
-        df = df.copy()
-        for (cust, product), group in df.groupby([customer_col, product_col]):
-            group = group.sort_values('Month_Order').reset_index(drop=True)
-            inactive_streak = 0
-            
-            for idx, row in group.iterrows():
-                if row['Status'] == "🟡 Inactive":
-                    inactive_streak += 1
-                else:
-                    inactive_streak = 0
-                
-                if inactive_streak >= 3:
-                    # Mark ALL last 3 months as Lost
-                    start_idx = max(0, idx - 2)
-                    lost_mask = group.iloc[start_idx:idx+1].index
-                    df.loc[group.index[lost_mask], 'Status'] = "🔴 Lost"
-        return df
-
+    # ✅ FIXED LOST LOGIC (Safe index handling)
     comparison_df = mark_lost_streaks(comparison_df)
+    
+    # 🟣 ENHANCED RECOVERED LOGIC (After Lost marking)
+    comparison_df = mark_recovered(comparison_df)
 
     # Convert Month Number to Name
     month_map = {
@@ -318,21 +349,30 @@ if uploaded_file:
         10:'Oct',11:'Nov',12:'Dec',1:'Jan',2:'Feb',3:'Mar'
     }
     comparison_df['Month'] = comparison_df['Month_Num'].map(month_map)
-    comparison_df = comparison_df.rename(columns={customer_col: 'Customer', product_col: 'Product'})
 
-    # 🚨 ENHANCED KPI INSIGHTS (Manager-level metrics)
+    # 🚨 FIXED KPI INSIGHTS (Manager-level metrics - UNIQUE customer-product pairs)
     total_cp_combinations = len(comparison_df)
-    lost_count = len(comparison_df[comparison_df['Status'] == "🔴 Lost"])
+    lost_df = comparison_df[comparison_df['Status'] == "🔴 Lost"].drop_duplicates(subset=['Customer','Product'])
+    lost_count = lost_df.shape[0]
+    
+    recovered_df = comparison_df[comparison_df['Status'].str.contains("Recovered")].drop_duplicates(subset=['Customer','Product'])
+    recovered_count = recovered_df.shape[0]
+    
     active_count = len(comparison_df[comparison_df['Status'] == "🟢 Active"])
     prev_cp_count = len(prev_agg)
     retention_rate = (active_count / prev_cp_count * 100) if prev_cp_count > 0 else 0
     expansion_count = len(comparison_df[comparison_df['Status'] == "🔵 Expansion"])
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("🔴 High Risk (Lost)", lost_count)
     col2.metric("🟢 Active", active_count)
-    col3.metric("💹 Retention Rate", f"{retention_rate:.1f}%")
-    col4.metric("🔵 Expansion", expansion_count)
+    col3.metric("🟣 Recovered", recovered_count)
+    col4.metric("💹 Retention Rate", f"{retention_rate:.1f}%")
+    col5.metric("🔵 Expansion", expansion_count)
+
+    # 🔥 RECOVERY INSIGHT
+    if recovered_count > 0:
+        st.info(f"🟣 **{recovered_count} customer-product pairs reactivated** after being Lost! 🎉")
 
     # 🔥 NEW FILTERS & SEARCH FOR Customer-Product Table
     st.markdown("### 🔍 Advanced Filters")
@@ -343,14 +383,14 @@ if uploaded_file:
         search_company = st.text_input("🔎 Search Company", placeholder="Type company name...")
     
     with filter_row2:
-        # Dropdown filters
+        # Dropdown filters (UPDATED with Recovered)
         all_statuses = sorted(comparison_df['Status'].unique())
         all_months = sorted(comparison_df['Month'].unique())
         all_products = sorted(comparison_df['Product'].dropna().unique())
         
         selected_status = st.multiselect("Status", options=all_statuses, default=all_statuses, key="cp_status")
         selected_months = st.multiselect("Months", options=all_months, default=all_months, key="cp_months")
-        selected_products_cp = st.multiselect("Products", options=all_products[:20], default=all_products[:20], key="cp_products")  # Limit to 20 for UI
+        selected_products_cp = st.multiselect("Products", options=all_products[:20], default=all_products[:20], key="cp_products")
 
     # Apply filters
     filtered_cp_df = comparison_df.copy()
@@ -453,11 +493,9 @@ if uploaded_file:
     cust_filter_row1, cust_filter_row2 = st.columns([2, 2])
     
     with cust_filter_row1:
-        # Search bar for Company name
         search_customer = st.text_input("🔎 Search Customer", placeholder="Type customer name...", key="cust_search")
     
     with cust_filter_row2:
-        # Status filter dropdown
         all_customer_statuses = sorted(behavior_df['Status'].unique())
         selected_customer_status = st.multiselect("Status", options=all_customer_statuses, default=all_customer_statuses, key="cust_status")
 
@@ -480,7 +518,7 @@ if uploaded_file:
             "Growth %": st.column_config.TextColumn("Growth %"),
             "Status": st.column_config.TextColumn("Status", width="150px"),
             "APR Change": st.column_config.TextColumn("APR Qty Change"),
-            "Prev Peak Month": st.column_config.TextColumn("Prev FY Peak Month", width="180px")  # 🔥 NEW COLUMN
+            "Prev Peak Month": st.column_config.TextColumn("Prev FY Peak Month", width="180px")
         },
         height=400, 
         width='stretch'
@@ -512,12 +550,12 @@ if uploaded_file:
         st.download_button(label="🧠 Customer-Product Status", data=display_df.to_csv(index=False), file_name="customer_product_status.csv", mime="text/csv")
 
 else:
-    st.info("👆 **Upload CSV/Excel with: Date, Product, Customer, Quantity**")
+    st.info("👈 **Upload CSV/Excel with: Date, Product, Customer, Quantity**")
     st.markdown("""
     ```
     Date        | Product | Customer | Quantity
-    2023-04-15  | Widget A| Acme Corp| 100
-    2023-05-20  | Widget B| Beta Ltd | 250
+    2025-04-15  | ABC | HCL | 10000
+    2025-05-20  | XYZ | HYPO| 250000
     ```
     **✅ Works with any column names containing: date/Date, product/Product, customer/Customer, qty/quantity/KG**
     """)

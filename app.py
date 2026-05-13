@@ -444,15 +444,19 @@ if uploaded_file:
         prev_yearly_sales = df_prev[df_prev[customer_col] == cust][qty_col].sum() if not df_prev.empty else 0
         curr_yearly_sales = df_curr[df_curr[customer_col] == cust][qty_col].sum()
         
-        # 🔥 NEW COLUMN: Previous FY Actual Month (highest month in prev FY)
-        if not df_prev.empty and len(df_prev[df_prev[customer_col] == cust]) > 0:
-            prev_monthly = df_prev[(df_prev[customer_col] == cust)].groupby('Month_Num')[qty_col].sum()
-            prev_peak_month_num = prev_monthly.idxmax() if not prev_monthly.empty else None
-            prev_peak_month = month_map.get(prev_peak_month_num, 'None')
-            prev_peak_qty = prev_monthly.max()
+        # ✅ LAST PURCHASE MONTH LOGIC
+        cust_prev_data = df_prev[
+            (df_prev[customer_col] == cust) &
+            (df_prev[qty_col] > 0)
+        ].sort_values(date_col)
+        
+        if not cust_prev_data.empty:
+            last_purchase_row = cust_prev_data.iloc[-1]
+            last_purchase_month = last_purchase_row['Month']
+            last_purchase_qty = last_purchase_row[qty_col]
         else:
-            prev_peak_month = 'None'
-            prev_peak_qty = 0
+            last_purchase_month = 'None'
+            last_purchase_qty = 0
         
         prev_apr_sales = df_prev[(df_prev[customer_col] == cust) & (df_prev['Month_Num'] == 4)][qty_col].sum()
         curr_apr_sales = df_curr[(df_curr[customer_col] == cust) & (df_curr['Month_Num'] == 4)][qty_col].sum()
@@ -484,9 +488,9 @@ if uploaded_file:
             growth_display = "0%"
         
         records.append([cust, f"{prev_yearly_sales:,.0f}", f"{curr_yearly_sales:,.0f}", growth_display, 
-                       status, apr_status, f"{prev_peak_month} ({prev_peak_qty:,.0f})"])
+                       status, apr_status, f"{last_purchase_month} ({last_purchase_qty:,.0f})"])
 
-    behavior_df = pd.DataFrame(records, columns=["Customer", "Prev FY", "Curr FY", "Growth %", "Status", "APR Change", "Prev Peak Month"])
+    behavior_df = pd.DataFrame(records, columns=["Customer", "Prev FY", "Curr FY", "Growth %", "Status", "APR Change", "Last Purchase Month"])
     
     # 🔥 NEW FILTERS & SEARCH FOR Customer Analysis Table
     st.markdown("### 🔍 Customer Filters")
@@ -518,7 +522,7 @@ if uploaded_file:
             "Growth %": st.column_config.TextColumn("Growth %"),
             "Status": st.column_config.TextColumn("Status", width="150px"),
             "APR Change": st.column_config.TextColumn("APR Qty Change"),
-            "Prev Peak Month": st.column_config.TextColumn("Prev FY Peak Month", width="180px")
+            "Last Purchase Month": st.column_config.TextColumn("Last Purchase Month", width="180px")
         },
         height=400, 
         width='stretch'

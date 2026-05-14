@@ -431,8 +431,7 @@ if uploaded_file:
     peak_month = monthly_comparison.loc[monthly_comparison['Current_FY'].idxmax(), 'Month']
     col3.info(f"📅 **Peak Month**: {peak_month}")
 
-    # =========================================================
-    # 👥 CUSTOMER ANALYSIS (ENHANCED WITH FILTERS & NEW COLUMN)
+    # 👥 CUSTOMER ANALYSIS (FIXED WITH NEW 4-MONTH LOST LOGIC)
     # =========================================================
     st.markdown("---")
     st.subheader("👥 Customer Analysis")
@@ -440,11 +439,30 @@ if uploaded_file:
     all_customers = set(df_prev[customer_col].dropna()) | set(df_curr[customer_col].dropna())
 
     records = []
+    today = pd.Timestamp.today()
+
     for cust in sorted(all_customers):
         prev_yearly_sales = df_prev[df_prev[customer_col] == cust][qty_col].sum() if not df_prev.empty else 0
         curr_yearly_sales = df_curr[df_curr[customer_col] == cust][qty_col].sum()
         
-        # ✅ LAST PURCHASE MONTH LOGIC
+        # 🔥 NEW LOST CUSTOMER LOGIC (4 MONTH RULE)
+        # Get latest purchase date from BOTH FYs
+        cust_all_data = df_filtered[
+            (df_filtered[customer_col] == cust) &
+            (df_filtered[qty_col] > 0)
+        ].sort_values(date_col)
+        
+        if not cust_all_data.empty:
+            latest_purchase_date = cust_all_data[date_col].max()
+            # Calculate month difference
+            months_gap = (
+                (today.year - latest_purchase_date.year) * 12 +
+                (today.month - latest_purchase_date.month)
+            )
+        else:
+            months_gap = 999
+        
+        # ✅ LAST PURCHASE MONTH LOGIC (KEEP EXISTING)
         cust_prev_data = df_prev[
             (df_prev[customer_col] == cust) &
             (df_prev[qty_col] > 0)
@@ -462,31 +480,38 @@ if uploaded_file:
         curr_apr_sales = df_curr[(df_curr[customer_col] == cust) & (df_curr['Month_Num'] == 4)][qty_col].sum()
         apr_qty_diff = curr_apr_sales - prev_apr_sales
         
-        if prev_yearly_sales > 0 and curr_yearly_sales > 0:
+        # 🔥 GROWTH CALCULATION
+        if prev_yearly_sales > 0:
             yearly_growth = safe_growth_calc(curr_yearly_sales, prev_yearly_sales)
-            if curr_apr_sales > 0 and prev_apr_sales > 0:
-                status = f"🟢 Active (APR)"
-                apr_status = f"{apr_qty_diff:+,.0f}"
-            elif curr_apr_sales > 0:
-                status = f"🟢 New APR"
-                apr_status = f"+{curr_apr_sales:,.0f}"
-            else:
-                status = "🟡 Active"
-                apr_status = "No APR"
             growth_display = f"{yearly_growth:+.1f}%"
-        elif prev_yearly_sales > 0 and curr_yearly_sales == 0:
-            status = "🔴 Lost"
-            apr_status = f"-{prev_apr_sales:,.0f}"
-            growth_display = "-100%"
-        elif prev_yearly_sales == 0 and curr_yearly_sales > 0:
-            status = "🟡 New"
-            apr_status = f"+{curr_apr_sales:,.0f}"
+        elif curr_yearly_sales > 0:
             growth_display = "∞%"
         else:
-            status = "⚪ Inactive"
-            apr_status = "0"
             growth_display = "0%"
         
+        # 🔥 APR DISPLAY
+        if curr_apr_sales > 0 or prev_apr_sales > 0:
+            apr_status = f"{apr_qty_diff:+,.0f}"
+        else:
+            apr_status = "0"
+        
+        # =====================================================
+        # ✅ FINAL CUSTOMER STATUS - FIXED LOGIC
+        # =====================================================
+        if curr_yearly_sales > 0 and prev_yearly_sales == 0:
+            status = "🟡 New"
+
+        elif prev_yearly_sales == 0 and curr_yearly_sales == 0:
+            status = "⚪ Inactive"
+
+        else:
+            # 🔥 REAL BUSINESS LOGIC
+            # Lost only if no purchase for 4+ months
+            if months_gap > 4:
+                status = "🔴 Lost"
+            else:
+                status = "[NIL]"
+
         records.append([cust, f"{prev_yearly_sales:,.0f}", f"{curr_yearly_sales:,.0f}", growth_display, 
                        status, apr_status, f"{last_purchase_month} ({last_purchase_qty:,.0f})"])
 
@@ -531,12 +556,12 @@ if uploaded_file:
     # Customer Status Summary
     st.markdown("---")
     col1, col2, col3, col4 = st.columns(4)
-    active_apr = len(behavior_df[behavior_df['Status'].str.contains('APR|New APR', na=False)])
+    active_apr = len(behavior_df[behavior_df['Status'].str.contains('APR|New APR|[NIL]', na=False)])
     total_customers = len(behavior_df)
     lost_customers = len(behavior_df[behavior_df['Status'].str.contains('Lost', na=False)])
     new_customers = len(behavior_df[behavior_df['Status'].str.contains('New', na=False)])
 
-    col1.metric("🟢 Active APR", active_apr)
+    col1.metric("🟢 Active/[NIL]", active_apr)
     col2.metric("🔴 Lost", lost_customers)
     col3.metric("🟡 New", new_customers)
     col4.metric("📊 Total", total_customers)

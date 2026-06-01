@@ -78,6 +78,34 @@ uploaded_file = st.sidebar.file_uploader("Upload Sales Data", type=['csv','xlsx'
 if uploaded_file:
     with st.spinner("Loading and processing data..."):
         df = load_data(uploaded_file)
+
+        # =====================================================
+        # SALESMAN MAPPING
+        # =====================================================
+        salesman_mapping = {}
+
+        try:
+            # If Excel contains Salesman_Master sheet
+            if uploaded_file.name.endswith('.xlsx'):
+                excel_file = pd.ExcelFile(uploaded_file)
+
+                if 'Salesman_Master' in excel_file.sheet_names:
+                    salesman_df = pd.read_excel(excel_file, sheet_name='Salesman_Master')
+
+                    salesman_customer_col = find_column(salesman_df, ['customer'])
+                    salesman_name_col = find_column(salesman_df, ['salesman', 'sales man', 'sales_person'])
+
+                    if salesman_customer_col and salesman_name_col:
+                        salesman_mapping = dict(
+                            zip(
+                                salesman_df[salesman_customer_col].astype(str).str.strip(),
+                                salesman_df[salesman_name_col].astype(str).str.strip()
+                            )
+                        )
+
+        except Exception as e:
+            st.warning(f"⚠️ Salesman mapping not loaded: {e}")
+
         date_col = find_column(df, ['date', 'Date', 'DATE'])
         product_col = find_column(df, ['product', 'Product', 'PRODUCT'])
         customer_col = find_column(df, ['customer', 'Customer', 'CUSTOMER', 'client'])
@@ -442,6 +470,9 @@ if uploaded_file:
     today = pd.Timestamp.today()
 
     for cust in sorted(all_customers):
+        # Get salesman name
+        salesman_name = salesman_mapping.get(str(cust).strip(), "UNKNOWN")
+
         prev_yearly_sales = df_prev[df_prev[customer_col] == cust][qty_col].sum() if not df_prev.empty else 0
         curr_yearly_sales = df_curr[df_curr[customer_col] == cust][qty_col].sum()
         
@@ -470,7 +501,7 @@ if uploaded_file:
         
         if not cust_prev_data.empty:
             last_purchase_row = cust_prev_data.iloc[-1]
-            last_purchase_month = last_purchase_row['Month']
+            last_purchase_month = last_purchase_row[date_col].strftime('%b %Y')
             last_purchase_qty = last_purchase_row[qty_col]
         else:
             last_purchase_month = 'None'
@@ -512,10 +543,27 @@ if uploaded_file:
             else:
                 status = "[NIL]"
 
-        records.append([cust, f"{prev_yearly_sales:,.0f}", f"{curr_yearly_sales:,.0f}", growth_display, 
-                       status, apr_status, f"{last_purchase_month} ({last_purchase_qty:,.0f})"])
+        records.append([
+            cust,
+            salesman_name,
+            f"{prev_yearly_sales:,.0f}",
+            f"{curr_yearly_sales:,.0f}",
+            growth_display,
+            status,
+            apr_status,
+            f"{last_purchase_month} ({last_purchase_qty:,.0f})"
+        ])
 
-    behavior_df = pd.DataFrame(records, columns=["Customer", "Prev FY", "Curr FY", "Growth %", "Status", "APR Change", "Last Purchase Month"])
+    behavior_df = pd.DataFrame(records, columns=[
+        "Customer",
+        "Salesman",
+        "Prev FY",
+        "Curr FY",
+        "Growth %",
+        "Status",
+        "APR Change",
+        "Last Purchase Month"
+    ])
     
     # 🔥 NEW FILTERS & SEARCH FOR Customer Analysis Table
     st.markdown("### 🔍 Customer Filters")
@@ -542,6 +590,7 @@ if uploaded_file:
         filtered_behavior_df.sort_values("Curr FY", ascending=False),
         column_config={
             "Customer": st.column_config.TextColumn("Customer"),
+            "Salesman": st.column_config.TextColumn("Salesman"),
             "Prev FY": st.column_config.NumberColumn("Prev FY Total", format="%.0f"),
             "Curr FY": st.column_config.NumberColumn("Curr FY Total", format="%.0f"),
             "Growth %": st.column_config.TextColumn("Growth %"),

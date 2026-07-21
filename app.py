@@ -1,10 +1,15 @@
 import os
 os.environ["STREAMLIT_DATAFRAME_SERIALIZATION"] = "legacy"
+import re
+from io import BytesIO
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="AI Sales Dashboard", layout="wide")
 st.title("📊 AI-Powered Sales Analytics Dashboard")
@@ -28,6 +33,23 @@ def safe_growth_calc(curr, prev):
     if prev == 0:
         return float('inf') if curr > 0 else 0
     return ((curr - prev) / prev) * 100
+
+# =====================================================================
+# 🔧 FIX #1: NORMALIZED NAME MATCHING FOR SALESMAN LOOKUP
+# =====================================================================
+def normalize_customer_name(name):
+    """
+    Normalizes a customer name so it matches reliably across sheets,
+    regardless of extra spaces, commas, semicolons, periods, or case.
+    e.g. "A.G.MORE", "A G MORE", "A,G,MORE ," -> "AG MORE"
+    """
+    if pd.isna(name):
+        return ""
+    name = str(name).upper()
+    name = name.replace('\r', ' ').replace('\n', ' ')   # stray line breaks (seen in your data, e.g. "_x000D_")
+    name = re.sub(r'[.,;:]', '', name)                    # strip punctuation
+    name = re.sub(r'\s+', ' ', name).strip()              # collapse multiple/leading/trailing spaces
+    return name
 
 # 🔥 FIXED LOST LOGIC + ENHANCED RECOVERED
 def mark_lost_streaks(df, customer_col='Customer', product_col='Product'):
@@ -73,6 +95,120 @@ def mark_recovered(df, customer_col='Customer', product_col='Product'):
     
     return df
 
+# =====================================================================
+# 🔧 FIX #2: SALESMAN-WISE, STATUS-WISE EXCEL EXPORT
+# =====================================================================
+def generate_salesman_status_excel(behavior_df, selected_statuses):
+    """
+    Builds one sheet per Salesman. Within each sheet, every Status the user
+    currently has selected (Nil / Inactive / Lost / New) gets its own
+    titled, bordered table placed side-by-side (left to right) on that sheet.
+    Headers use a bold white-on-blue font; data uses a plain font; everything
+    is center-aligned.
+    """
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    title_font = Font(name='Calibri', size=12, bold=True, color='1F4E78')
+    header_font = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
+    header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+    data_font = Font(name='Arial', size=10)
+    center_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    thin = Side(style='thin', color='B7B7B7')
+    thin_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    export_columns = ["Customer", "Prev FY", "Curr FY", "Growth %", "APR Change", "Last Purchase Month"]
+    numeric_columns = {"Prev FY", "Curr FY", "APR Change"}  # these get written as real numbers, not text
+    col_gap = 1  # blank column between each status block
+
+    def to_number(value):
+        """Strips commas/plus-signs from strings like '4,750' or '+3,000' and
+        returns a real float so Excel doesn't flag it as 'Number Stored as Text'.
+        Returns None if it can't be parsed (left as text in that case)."""
+        try:
+            cleaned = str(value).replace(',', '').replace('+', '').strip()
+            return float(cleaned)
+        except (ValueError, TypeError):
+            return None
+
+    salesmen = sorted(behavior_df['Salesman'].dropna().unique())
+    if not salesmen:
+        salesmen = ["UNKNOWN"]
+
+    used_sheet_names = set()
+
+    for sm in salesmen:
+        sm_df = behavior_df[behavior_df['Salesman'] == sm]
+
+        # Excel sheet names: max 31 chars, must be unique, no []:*?/\
+        safe_name = re.sub(r'[\[\]:\*\?/\\]', '', str(sm))[:31] or "UNKNOWN"
+        base_name = safe_name
+        n = 1
+        while safe_name in used_sheet_names:
+            n += 1
+            safe_name = f"{base_name[:28]}_{n}"
+        used_sheet_names.add(safe_name)
+
+        ws = wb.create_sheet(title=safe_name)
+        col_cursor = 1
+        any_block_written = False
+
+        for status in selected_statuses:
+            block_df = sm_df[sm_df['Status'] == status]
+            if block_df.empty:
+                continue
+            any_block_written = True
+
+            n_cols = len(export_columns)
+
+            # Title row (merged across the block's width)
+            title_cell = ws.cell(row=1, column=col_cursor, value=f"{status}  ({len(block_df)})")
+            ws.merge_cells(start_row=1, start_column=col_cursor, end_row=1, end_column=col_cursor + n_cols - 1)
+            title_cell.font = title_font
+            title_cell.alignment = center_align
+
+            # Header row
+            for j, col_name in enumerate(export_columns):
+                c = ws.cell(row=2, column=col_cursor + j, value=col_name)
+                c.font = header_font
+                c.fill = header_fill
+                c.alignment = center_align
+                c.border = thin_border
+
+            # Data rows
+            for i, (_, row) in enumerate(block_df.iterrows()):
+                for j, col_name in enumerate(export_columns):
+                    raw_value = row[col_name]
+                    if col_name in numeric_columns:
+                        num_value = to_number(raw_value)
+                        if num_value is not None:
+                            c = ws.cell(row=3 + i, column=col_cursor + j, value=num_value)
+                            c.number_format = '#,##0;(#,##0)'
+                        else:
+                            c = ws.cell(row=3 + i, column=col_cursor + j, value=raw_value)
+                    else:
+                        c = ws.cell(row=3 + i, column=col_cursor + j, value=raw_value)
+                    c.font = data_font
+                    c.alignment = center_align
+                    c.border = thin_border
+
+            # Column widths for this block
+            for j, col_name in enumerate(export_columns):
+                width = 22 if col_name in ("Customer", "Last Purchase Month") else 14
+                ws.column_dimensions[get_column_letter(col_cursor + j)].width = width
+
+            col_cursor += n_cols + col_gap
+
+        if not any_block_written:
+            ws.cell(row=1, column=1, value="No records for the selected status filters").font = Font(italic=True)
+
+        ws.freeze_panes = "A3"
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
 uploaded_file = st.sidebar.file_uploader("Upload Sales Data", type=['csv','xlsx'])
 
 if uploaded_file:
@@ -80,7 +216,7 @@ if uploaded_file:
         df = load_data(uploaded_file)
 
         # =====================================================
-        # SALESMAN MAPPING
+        # SALESMAN MAPPING (now normalized — see Fix #1 above)
         # =====================================================
         salesman_mapping = {}
 
@@ -96,9 +232,10 @@ if uploaded_file:
                     salesman_name_col = find_column(salesman_df, ['salesman', 'sales man', 'sales_person'])
 
                     if salesman_customer_col and salesman_name_col:
+                        salesman_df['_norm_customer'] = salesman_df[salesman_customer_col].apply(normalize_customer_name)
                         salesman_mapping = dict(
                             zip(
-                                salesman_df[salesman_customer_col].astype(str).str.strip(),
+                                salesman_df['_norm_customer'],
                                 salesman_df[salesman_name_col].astype(str).str.strip()
                             )
                         )
@@ -123,7 +260,7 @@ if uploaded_file:
             st.stop()
 
         original_rows = len(df)
-        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        df[date_col] = pd.to_datetime(df[date_col], format='%b-%Y', errors='coerce')
         df = df.dropna(subset=[date_col])
         df[qty_col] = pd.to_numeric(df[qty_col], errors='coerce')
         df = df.dropna(subset=[qty_col])
@@ -470,8 +607,10 @@ if uploaded_file:
     today = pd.Timestamp.today()
 
     for cust in sorted(all_customers):
-        # Get salesman name
-        salesman_name = salesman_mapping.get(str(cust).strip(), "UNKNOWN")
+        # Get salesman name — Fix #1: normalized lookup so spacing/punctuation
+        # differences between "Combined Sales" and "Salesman_Master" don't
+        # cause a real match to fall through to UNKNOWN.
+        salesman_name = salesman_mapping.get(normalize_customer_name(cust), "UNKNOWN")
 
         prev_yearly_sales = df_prev[df_prev[customer_col] == cust][qty_col].sum() if not df_prev.empty else 0
         curr_yearly_sales = df_curr[df_curr[customer_col] == cust][qty_col].sum()
@@ -617,7 +756,7 @@ if uploaded_file:
 
     # Downloads
     st.markdown("---")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.download_button(label="📥 Current FY", data=df_curr.to_csv(index=False), file_name=f"sales_{fy_selector.replace('-','_')}.csv", mime="text/csv")
     with col2:
@@ -626,6 +765,15 @@ if uploaded_file:
         st.download_button(label="🔄 Full Data", data=df.to_csv(index=False), file_name="full_dataset.csv", mime="text/csv")
     with col4:
         st.download_button(label="🧠 Customer-Product Status", data=display_df.to_csv(index=False), file_name="customer_product_status.csv", mime="text/csv")
+    with col5:
+        # 🔥 FIX #2: Customer Analysis by Salesman + Status, formatted Excel
+        salesman_status_excel = generate_salesman_status_excel(filtered_behavior_df, selected_customer_status)
+        st.download_button(
+            label="👤 Customer Analysis by Salesman (Excel)",
+            data=salesman_status_excel,
+            file_name="customer_analysis_by_salesman_status.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 else:
     st.info("👈 **Upload CSV/Excel with: Date, Product, Customer, Quantity**")

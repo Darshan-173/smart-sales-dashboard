@@ -117,8 +117,8 @@ def generate_salesman_status_excel(behavior_df, selected_statuses):
     thin = Side(style='thin', color='B7B7B7')
     thin_border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    export_columns = ["Customer", "Prev FY", "Curr FY", "Growth %", "APR Change", "Last Purchase Month"]
-    numeric_columns = {"Prev FY", "Curr FY", "APR Change"}  # these get written as real numbers, not text
+    export_columns = ["Customer", "Prev FY", "Curr FY", "Growth %", "Last Purchase Month Qty Change", "Last Purchase Month"]
+    numeric_columns = {"Prev FY", "Curr FY", "Last Purchase Month Qty Change"}  # these get written as real numbers, not text
     col_gap = 1  # blank column between each status block
 
     def to_number(value):
@@ -632,23 +632,39 @@ if uploaded_file:
         else:
             months_gap = 999
         
-        # ✅ LAST PURCHASE MONTH LOGIC (KEEP EXISTING)
-        cust_prev_data = df_prev[
-            (df_prev[customer_col] == cust) &
-            (df_prev[qty_col] > 0)
-        ].sort_values(date_col)
-        
-        if not cust_prev_data.empty:
-            last_purchase_row = cust_prev_data.iloc[-1]
-            last_purchase_month = last_purchase_row[date_col].strftime('%b %Y')
+        # =====================================================
+        # ✅ FIX #1: LAST PURCHASE MONTH — now uses the TRUE latest
+        # purchase across ALL filtered data (current FY + previous FY),
+        # not just previous FY. Previously a customer who kept buying
+        # into the current FY (e.g. May-2026) still showed a stale
+        # Previous-FY month because only df_prev was checked.
+        # =====================================================
+        if not cust_all_data.empty:
+            last_purchase_row = cust_all_data.iloc[-1]
+            last_purchase_date_val = last_purchase_row[date_col]
+            last_purchase_month = last_purchase_date_val.strftime('%b %Y')
             last_purchase_qty = last_purchase_row[qty_col]
+            last_purchase_month_num = last_purchase_date_val.month
         else:
             last_purchase_month = 'None'
             last_purchase_qty = 0
+            last_purchase_month_num = None
         
-        prev_apr_sales = df_prev[(df_prev[customer_col] == cust) & (df_prev['Month_Num'] == 4)][qty_col].sum()
-        curr_apr_sales = df_curr[(df_curr[customer_col] == cust) & (df_curr['Month_Num'] == 4)][qty_col].sum()
-        apr_qty_diff = curr_apr_sales - prev_apr_sales
+        # =====================================================
+        # ✅ FIX #2: LAST PURCHASE MONTH QTY CHANGE — replaces the old
+        # fixed "April only" comparison. Compares the SAME calendar
+        # month (the customer's actual last purchase month) across
+        # Previous FY vs Current FY.
+        # e.g. last purchase month = May -> compares May-2025 vs May-2026.
+        # =====================================================
+        if last_purchase_month_num is not None:
+            prev_lpm_sales = df_prev[(df_prev[customer_col] == cust) & (df_prev['Month_Num'] == last_purchase_month_num)][qty_col].sum()
+            curr_lpm_sales = df_curr[(df_curr[customer_col] == cust) & (df_curr['Month_Num'] == last_purchase_month_num)][qty_col].sum()
+            lpm_qty_diff = curr_lpm_sales - prev_lpm_sales
+        else:
+            prev_lpm_sales = 0
+            curr_lpm_sales = 0
+            lpm_qty_diff = 0
         
         # 🔥 GROWTH CALCULATION
         if prev_yearly_sales > 0:
@@ -659,11 +675,11 @@ if uploaded_file:
         else:
             growth_display = "0%"
         
-        # 🔥 APR DISPLAY
-        if curr_apr_sales > 0 or prev_apr_sales > 0:
-            apr_status = f"{apr_qty_diff:+,.0f}"
+        # 🔥 LAST PURCHASE MONTH QTY CHANGE DISPLAY
+        if curr_lpm_sales > 0 or prev_lpm_sales > 0:
+            lpm_status = f"{lpm_qty_diff:+,.0f}"
         else:
-            apr_status = "0"
+            lpm_status = "0"
         
         # =====================================================
         # ✅ FINAL CUSTOMER STATUS - FIXED LOGIC
@@ -689,7 +705,7 @@ if uploaded_file:
             f"{curr_yearly_sales:,.0f}",
             growth_display,
             status,
-            apr_status,
+            lpm_status,
             f"{last_purchase_month} ({last_purchase_qty:,.0f})"
         ])
 
@@ -700,7 +716,7 @@ if uploaded_file:
         "Curr FY",
         "Growth %",
         "Status",
-        "APR Change",
+        "Last Purchase Month Qty Change",
         "Last Purchase Month"
     ])
     
@@ -734,7 +750,7 @@ if uploaded_file:
             "Curr FY": st.column_config.NumberColumn("Curr FY Total", format="%.0f"),
             "Growth %": st.column_config.TextColumn("Growth %"),
             "Status": st.column_config.TextColumn("Status", width="150px"),
-            "APR Change": st.column_config.TextColumn("APR Qty Change"),
+            "Last Purchase Month Qty Change": st.column_config.TextColumn("Last Purchase Month Qty Change", width="200px"),
             "Last Purchase Month": st.column_config.TextColumn("Last Purchase Month", width="180px")
         },
         height=400, 
